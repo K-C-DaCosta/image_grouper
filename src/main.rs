@@ -1,7 +1,8 @@
 use clap::{arg, command, Command};
 use image_grouper::{filesysutils::*, perceptual};
+use serde::Serialize;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     env,
     path::{Path, PathBuf},
 };
@@ -22,13 +23,28 @@ const VALID_IMAGE_EXTS: &[&str] = &["bmp", "png", "jpg", "jpeg", "gif", "tga", "
 
 type GroupID = usize;
 
+#[derive(Clone, Serialize, Debug)]
 pub struct ImageInfo {
     pub hash: u64,
     pub image_idx: usize,
 }
+
+#[derive(Clone, Serialize, Debug)]
 pub struct GroupInfo {
     pub hash: u64,
     pub similar_images: Vec<ImageInfo>,
+}
+
+#[derive(Serialize)]
+pub struct ImageEntry {
+    hash: u64,
+    path: PathBuf,
+}
+
+#[derive(Serialize)]
+pub struct ProgramOutput {
+    pub image_info_list: Vec<ImageEntry>,
+    pub group_table: HashMap<GroupID, GroupInfo>,
 }
 
 fn main() {
@@ -84,17 +100,23 @@ fn main() {
             .filter_map(|file| image::open(&file).ok().zip(Some(file)));
 
         //execute iterator here
-        let hash_list = match hash_method {
+        let image_info_list = match hash_method {
             HashType::AHASH => {
                 // println!("picked ahash");
                 file_iterator
-                    .map(|(img, path)| (perceptual::ahash(&img), path))
+                    .map(|(img, path)| ImageEntry {
+                        hash: perceptual::ahash(&img),
+                        path,
+                    })
                     .collect::<Vec<_>>()
             }
             HashType::DHASH => {
                 // println!("picked dhash");
                 file_iterator
-                    .map(|(img, path)| (perceptual::dhash(&img), path))
+                    .map(|(img, path)| ImageEntry {
+                        hash: perceptual::dhash(&img),
+                        path,
+                    })
                     .collect::<Vec<_>>()
             }
             _ => {
@@ -102,12 +124,17 @@ fn main() {
                 vec![]
             }
         };
+
+        //below is the algorithm where I group images based on similarity score
         let mut group_counter = 0;
         let mut group_table: HashMap<GroupID, GroupInfo> = HashMap::new();
         const EPSILON: u64 = 90;
 
-        for i in 0..hash_list.len() {
-            let (hash_a, _path_a) = &hash_list[i];
+        for i in 0..image_info_list.len() {
+            let ImageEntry {
+                hash: hash_a,
+                path: _path_a,
+            } = &image_info_list[i];
 
             //check if the image is already in a bucket
             for (_, groups) in group_table.iter_mut() {
@@ -121,8 +148,11 @@ fn main() {
                 }
             }
 
-            for j in i + 1..hash_list.len() {
-                let (hash_b, _path_b) = &hash_list[j];
+            for j in i + 1..image_info_list.len() {
+                let ImageEntry {
+                    hash: hash_b,
+                    path: _path_b,
+                } = &image_info_list[j];
 
                 //score is between 0-100
                 let score = perceptual::similarity_score(*hash_a, *hash_b);
@@ -148,9 +178,19 @@ fn main() {
                     );
 
                     //increment group counter
-                    group_counter+=1;
+                    group_counter += 1;
                 }
             }
+        }
+
+        let output = ProgramOutput{
+            image_info_list,
+            group_table
+        };
+        if let Ok(json) = serde_json::to_string(&output){
+            println!("{}",json);
+        }else{
+            eprintln!("Error: failed to serialize grouping data");
         }
     }
 }
