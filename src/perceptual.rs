@@ -1,5 +1,5 @@
 use image::{imageops::FilterType, GenericImageView};
-
+/// average hashing
 pub fn ahash(image: &image::DynamicImage) -> u64 {
     let downscaled = image.resize(8, 8, FilterType::Gaussian).grayscale();
 
@@ -35,4 +35,11 @@ pub fn dhash(image: &image::DynamicImage) -> u64 {
 
 pub fn phash(image: &image::DynamicImage) -> u64 {
     unimplemented!("p-hash currently not implemented")
+}
+/// # Description
+/// computes the similarity score 
+/// ## returns 
+/// a value of 0-100. where 0 meaning no similarity and 100 meaning very similar 
+pub fn similarity_score(hash_a: u64, hash_b: u64) -> u64 {
+    ((hash_a & hash_b).count_ones() as u64 * 64) / 100
 }

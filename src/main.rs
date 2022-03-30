@@ -1,6 +1,10 @@
 use clap::{arg, command, Command};
 use image_grouper::{filesysutils::*, perceptual};
-use std::{env, path::Path};
+use std::{
+    collections::{HashMap, HashSet},
+    env,
+    path::{Path, PathBuf},
+};
 
 #[derive(Copy, Clone, Debug)]
 pub enum HashType {
@@ -15,6 +19,17 @@ impl Default for HashType {
 }
 
 const VALID_IMAGE_EXTS: &[&str] = &["bmp", "png", "jpg", "jpeg", "gif", "tga", "tiff", "ppm"];
+
+type GroupID = usize;
+
+pub struct ImageInfo {
+    pub hash: u64,
+    pub image_idx: usize,
+}
+pub struct GroupInfo {
+    pub hash: u64,
+    pub similar_images: Vec<ImageInfo>,
+}
 
 fn main() {
     let matches = command!()
@@ -32,7 +47,7 @@ fn main() {
         )
         .arg(
             arg!(
-                -f --func <TYPE> ... "hash function"
+                -f --func <TYPE> ... "hash function. TYPE can be: 'phash' 'ahash' or 'dhash'"
             )
             .required(false)
             .default_value("ahash"),
@@ -58,7 +73,7 @@ fn main() {
             eprintln!("'{:?}' is not a directory", path);
             return;
         }
-        
+
         //setup an iterator to bfs the filesystem for image files
         let file_iterator = FileSystemIterator::new(path)
             .filter(|path| path.is_file())
@@ -69,55 +84,73 @@ fn main() {
             .filter_map(|file| image::open(&file).ok().zip(Some(file)));
 
         //execute iterator here
-        match hash_method {
+        let hash_list = match hash_method {
             HashType::AHASH => {
                 // println!("picked ahash");
                 file_iterator
                     .map(|(img, path)| (perceptual::ahash(&img), path))
-                    .for_each(|(hash, path)| {
-
-                    })
+                    .collect::<Vec<_>>()
             }
             HashType::DHASH => {
                 // println!("picked dhash");
                 file_iterator
                     .map(|(img, path)| (perceptual::dhash(&img), path))
-                    .for_each(|(hash, path)| {
-
-                    })
+                    .collect::<Vec<_>>()
             }
-            _ => eprintln!("{:?} not implemented", hash_method),
+            _ => {
+                eprintln!("{:?} not implemented", hash_method);
+                vec![]
+            }
+        };
+        let mut group_counter = 0;
+        let mut group_table: HashMap<GroupID, GroupInfo> = HashMap::new();
+        const EPSILON: u64 = 90;
+
+        for i in 0..hash_list.len() {
+            let (hash_a, _path_a) = &hash_list[i];
+
+            //check if the image is already in a bucket
+            for (_, groups) in group_table.iter_mut() {
+                let group_hash = groups.hash;
+                let score = perceptual::similarity_score(*hash_a, group_hash);
+                if score > EPSILON {
+                    groups.similar_images.push(ImageInfo {
+                        hash: *hash_a,
+                        image_idx: i,
+                    })
+                }
+            }
+
+            for j in i + 1..hash_list.len() {
+                let (hash_b, _path_b) = &hash_list[j];
+
+                //score is between 0-100
+                let score = perceptual::similarity_score(*hash_a, *hash_b);
+
+                if score > EPSILON {
+                    //the two images are similar
+                    //create a group with two of the images inside
+                    group_table.insert(
+                        group_counter,
+                        GroupInfo {
+                            hash: *hash_a,
+                            similar_images: vec![
+                                ImageInfo {
+                                    hash: *hash_a,
+                                    image_idx: i,
+                                },
+                                ImageInfo {
+                                    hash: *hash_b,
+                                    image_idx: j,
+                                },
+                            ],
+                        },
+                    );
+
+                    //increment group counter
+                    group_counter+=1;
+                }
+            }
         }
     }
-
-    // // You can check the value provided by positional arguments, or option arguments
-    // if let Some(name) = matches.value_of("name") {
-    //     println!("Value for name: {}", name);
-    // }
-
-    // if let Some(raw_config) = matches.value_of_os("config") {
-    //     let config_path = Path::new(raw_config);
-    //     println!("Value for config: {}", config_path.display());
-    // }
-
-    // // You can see how many times a particular flag or argument occurred
-    // // Note, only flags can have multiple occurrences
-    // match matches.occurrences_of("debug") {
-    //     0 => println!("Debug mode is off"),
-    //     1 => println!("Debug mode is kind of on"),
-    //     2 => println!("Debug mode is on"),
-    //     _ => println!("Don't be crazy"),
-    // }
-
-    // // You can check for the existence of subcommands, and if found use their
-    // // matches just as you would the top level cmd
-    // if let Some(matches) = matches.subcommand_matches("test") {
-    //     // "$ myapp test" was run
-    //     if matches.is_present("list") {
-    //         // "$ myapp test -l" was run
-    //         println!("Printing testing lists...");
-    //     } else {
-    //         println!("Not printing testing lists...");
-    //     }
-    // }
 }
