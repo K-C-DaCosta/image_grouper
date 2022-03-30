@@ -4,6 +4,7 @@ use serde::Serialize;
 use std::{
     collections::HashMap,
     env,
+    ffi::OsStr,
     path::{Path, PathBuf},
 };
 
@@ -35,7 +36,7 @@ pub struct GroupInfo {
     pub similar_images: Vec<ImageInfo>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug)]
 pub struct ImageEntry {
     hash: u64,
     path: PathBuf,
@@ -43,9 +44,13 @@ pub struct ImageEntry {
 
 #[derive(Serialize)]
 pub struct ProgramOutput {
-    pub image_info_list: Vec<ImageEntry>,
     pub group_table: HashMap<GroupID, GroupInfo>,
+    pub image_info_list: Vec<ImageEntry>,
 }
+
+
+
+
 
 fn main() {
     let matches = command!()
@@ -93,8 +98,9 @@ fn main() {
         //setup an iterator to bfs the filesystem for image files
         let file_iterator = FileSystemIterator::new(path)
             .filter(|path| path.is_file())
+            .filter(|path| path.extension().is_some())
             .filter(|image_file| {
-                let ext = image_file.as_os_str().to_str().unwrap_or_default();
+                let ext = image_file.extension().unwrap().to_str().unwrap_or_default();
                 VALID_IMAGE_EXTS.contains(&ext)
             })
             .filter_map(|file| image::open(&file).ok().zip(Some(file)));
@@ -125,10 +131,12 @@ fn main() {
             }
         };
 
+        // println!("{:?}", image_info_list);
+
         //below is the algorithm where I group images based on similarity score
         let mut group_counter = 0;
         let mut group_table: HashMap<GroupID, GroupInfo> = HashMap::new();
-        const EPSILON: u64 = 90;
+        const EPSILON: u64 = 80;
 
         for i in 0..image_info_list.len() {
             let ImageEntry {
@@ -136,6 +144,7 @@ fn main() {
                 path: _path_a,
             } = &image_info_list[i];
 
+            let mut  belongs_to_group = false; 
             //check if the image is already in a bucket
             for (_, groups) in group_table.iter_mut() {
                 let group_hash = groups.hash;
@@ -144,11 +153,18 @@ fn main() {
                     groups.similar_images.push(ImageInfo {
                         hash: *hash_a,
                         image_idx: i,
-                    })
+                    });
+
+                    belongs_to_group = true;
+                    break;
                 }
             }
+            if belongs_to_group {
+                continue;
+            }
 
-            for j in i + 1..image_info_list.len() {
+
+            for j in i+1..image_info_list.len() {
                 let ImageEntry {
                     hash: hash_b,
                     path: _path_b,
@@ -183,13 +199,13 @@ fn main() {
             }
         }
 
-        let output = ProgramOutput{
+        let output = ProgramOutput {
             image_info_list,
-            group_table
+            group_table,
         };
-        if let Ok(json) = serde_json::to_string(&output){
-            println!("{}",json);
-        }else{
+        if let Ok(json) = serde_json::to_string(&output) {
+            println!("{}", json);
+        } else {
             eprintln!("Error: failed to serialize grouping data");
         }
     }
