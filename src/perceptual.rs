@@ -36,12 +36,21 @@ pub fn dhash(image: &image::DynamicImage) -> u64 {
 pub fn phash(image: &image::DynamicImage) -> u64 {
     unimplemented!("p-hash currently not implemented")
 }
+
 /// # Description
 /// computes the similarity score
 /// ## returns
-/// a value of 0-100. where 0 meaning no similarity and 100 meaning very similar
+/// a value of 0-100. where 0 means no similarity and 100 meaning very similar
 pub fn similarity_score(hash_a: u64, hash_b: u64) -> u64 {
     ((hash_a ^ hash_b).count_zeros() as u64 * 100) /  64
+}
+
+/// # Description
+/// computes the distance between two hamming points
+/// ## returns
+/// a value of 0-100. where 0 means close and 100 meaning very far
+pub fn hamming_distance(hash_a: u64, hash_b: u64) -> u64 {
+    ((hash_a ^ hash_b).count_ones() as u64 * 100) /  64
 }
 
 #[test]

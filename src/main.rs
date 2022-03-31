@@ -1,56 +1,13 @@
 use clap::{arg, command, Command};
-use image_grouper::{filesysutils::*, perceptual};
+use image_grouper::{filesysutils::*, graph::HammingMST, perceptual, *};
 use serde::Serialize;
-use std::{
-    collections::HashMap,
-    env,
-    ffi::OsStr,
-    path::{Path, PathBuf},
-};
-
-#[derive(Copy, Clone, Debug)]
-pub enum HashType {
-    AHASH = 0,
-    DHASH = 1,
-    PHASH = 2,
-}
-impl Default for HashType {
-    fn default() -> Self {
-        Self::AHASH
-    }
-}
-
-const VALID_IMAGE_EXTS: &[&str] = &["bmp", "png", "jpg", "jpeg", "gif", "tga", "tiff", "ppm"];
-
-type GroupID = usize;
-
-#[derive(Clone, Serialize, Debug)]
-pub struct ImageInfo {
-    pub hash: u64,
-    pub image_idx: usize,
-}
-
-#[derive(Clone, Serialize, Debug)]
-pub struct GroupInfo {
-    pub hash: u64,
-    pub similar_images: Vec<ImageInfo>,
-}
-
-#[derive(Serialize, Debug)]
-pub struct ImageEntry {
-    hash: u64,
-    path: PathBuf,
-}
+use std::{collections::HashMap, env, path::Path};
 
 #[derive(Serialize)]
 pub struct ProgramOutput {
     pub group_table: HashMap<GroupID, GroupInfo>,
     pub image_info_list: Vec<ImageEntry>,
 }
-
-
-
-
 
 fn main() {
     let matches = command!()
@@ -130,83 +87,89 @@ fn main() {
                 vec![]
             }
         };
+        let mimimum_spanning_tree = HammingMST::new(&image_info_list).unwrap();
 
-        // println!("{:?}", image_info_list);
+        println!("{:?}", image_info_list);
+        println!("{:?}", mimimum_spanning_tree);
+
+
+        mimimum_spanning_tree.hamiltonian_circuit(|sf|{
+            println!("{}",sf.idx);
+        });
 
         //below is the algorithm where I group images based on similarity score
-        let mut group_counter = 0;
-        let mut group_table: HashMap<GroupID, GroupInfo> = HashMap::new();
-        const EPSILON: u64 = 80;
+        // let mut group_counter = 0;
+        // let mut group_table: HashMap<GroupID, GroupInfo> = HashMap::new();
+        // const EPSILON: u64 = 80;
 
-        for i in 0..image_info_list.len() {
-            let ImageEntry {
-                hash: hash_a,
-                path: _path_a,
-            } = &image_info_list[i];
+        // for i in 0..image_info_list.len() {
+        //     let ImageEntry {
+        //         hash: hash_a,
+        //         path: _path_a,
+        //     } = &image_info_list[i];
 
-            let mut  belongs_to_group = false; 
-            //check if the image is already in a bucket
-            for (_, groups) in group_table.iter_mut() {
-                let group_hash = groups.hash;
-                let score = perceptual::similarity_score(*hash_a, group_hash);
-                if score > EPSILON {
-                    groups.similar_images.push(ImageInfo {
-                        hash: *hash_a,
-                        image_idx: i,
-                    });
+        //     let mut belongs_to_group = false;
+        //     //check if the image is already in a bucket
+        //     for (_, groups) in group_table.iter_mut() {
+        //         let group_hash = groups.hash;
+        //         let score = perceptual::similarity_score(*hash_a, group_hash);
+        //         if score > EPSILON {
+        //             groups.similar_images.push(ImageInfo {
+        //                 hash: *hash_a,
+        //                 image_idx: i,
+        //             });
 
-                    belongs_to_group = true;
-                    break;
-                }
-            }
-            if belongs_to_group {
-                continue;
-            }
+        //             belongs_to_group = true;
+        //             break;
+        //         }
+        //     }
+        //     if belongs_to_group {
+        //         continue;
+        //     }
 
+        //     for j in i + 1..image_info_list.len() {
+        //         let ImageEntry {
+        //             hash: hash_b,
+        //             path: _path_b,
+        //         } = &image_info_list[j];
 
-            for j in i+1..image_info_list.len() {
-                let ImageEntry {
-                    hash: hash_b,
-                    path: _path_b,
-                } = &image_info_list[j];
+        //         //score is between 0-100
+        //         let score = perceptual::similarity_score(*hash_a, *hash_b);
 
-                //score is between 0-100
-                let score = perceptual::similarity_score(*hash_a, *hash_b);
+        //         if score > EPSILON {
+        //             //the two images are similar
+        //             //create a group with two of the images inside
+        //             group_table.insert(
+        //                 group_counter,
+        //                 GroupInfo {
+        //                     hash: *hash_a,
+        //                     similar_images: vec![
+        //                         ImageInfo {
+        //                             hash: *hash_a,
+        //                             image_idx: i,
+        //                         },
+        //                         ImageInfo {
+        //                             hash: *hash_b,
+        //                             image_idx: j,
+        //                         },
+        //                     ],
+        //                 },
+        //             );
 
-                if score > EPSILON {
-                    //the two images are similar
-                    //create a group with two of the images inside
-                    group_table.insert(
-                        group_counter,
-                        GroupInfo {
-                            hash: *hash_a,
-                            similar_images: vec![
-                                ImageInfo {
-                                    hash: *hash_a,
-                                    image_idx: i,
-                                },
-                                ImageInfo {
-                                    hash: *hash_b,
-                                    image_idx: j,
-                                },
-                            ],
-                        },
-                    );
+        //             //increment group counter
+        //             group_counter += 1;
+        //         }
+        //     }
+        // }
 
-                    //increment group counter
-                    group_counter += 1;
-                }
-            }
-        }
-
-        let output = ProgramOutput {
-            image_info_list,
-            group_table,
-        };
-        if let Ok(json) = serde_json::to_string(&output) {
-            println!("{}", json);
-        } else {
-            eprintln!("Error: failed to serialize grouping data");
-        }
+        // let output = ProgramOutput {
+        //     image_info_list,
+        //     group_table,
+        // };
+        // if let Ok(json) = serde_json::to_string(&output) {
+        //     println!("{}", json);
+        // } else {
+        //     eprintln!("Error: failed to serialize grouping data");
+        // }
     }
 }
