@@ -1,7 +1,12 @@
 use clap::{arg, command, Command};
 use image_grouper::{filesysutils::*, graph::HammingMST, perceptual, *};
+use rayon::prelude::*;
 use serde::Serialize;
-use std::{collections::HashMap, env, path::Path};
+use std::{
+    collections::HashMap,
+    env,
+    path::{Path, PathBuf},
+};
 
 #[derive(Serialize)]
 pub struct ProgramOutput {
@@ -12,7 +17,10 @@ pub struct ProgramOutput {
 fn main() {
     let matches = command!()
         .about("A program the programatically groups similar images into folders")
-        .arg(arg!([directory] "will recursively traverse from here to collect group images"))
+        .arg(
+            arg!([directory] "will recursively traverse from here to collect group images")
+                .min_values(1),
+        )
         .arg(
             arg!(
                 -i --images <IMAGE_FILES> "expects specific paths of images to group"
@@ -44,31 +52,37 @@ fn main() {
         _ => HashType::default(),
     };
 
-    if let Some(directory) = matches.value_of("directory") {
-        let path: &Path = directory.as_ref();
-
-        if path.is_dir() == false {
-            eprintln!("'{:?}' is not a directory", path);
-            return;
-        }
-
+    if let Some(directories) = matches.values_of("directory") {
         //setup an iterator to bfs the filesystem for image files
-        let file_iterator = FileSystemIterator::new(path)
-            .filter(|path| path.is_file())
-            .filter(|path| path.extension().is_some())
-            .filter(|image_file| {
-                let ext = image_file.extension().unwrap().to_str().unwrap_or_default();
-                VALID_IMAGE_EXTS.contains(&ext)
+        let file_iterator = directories
+            .map(|dir| {
+                let dir: &Path = dir.as_ref();
+                dir
             })
-            .filter_map(|file| image::open(&file).ok().zip(Some(file)));
+            .filter(|dir| dir.is_dir())
+            .flat_map(|path| {
+                FileSystemIterator::new(path)
+                    .filter(|path| path.is_file())
+                    .filter(|path| path.extension().is_some())
+                    .filter(|image_file| {
+                        let ext = image_file.extension().unwrap().to_str().unwrap_or_default();
+                        VALID_IMAGE_EXTS.contains(&ext)
+                    })
+                    .filter_map(|file| image::open(&file).ok().zip(Some(file)))
+            });
 
         //execute iterator here
         let image_info_list = match hash_method {
             HashType::AHASH => {
                 // println!("picked ahash");
                 file_iterator
+                    .par_bridge()
                     .map(|(img, path)| ImageEntry {
-                        hash: perceptual::ahash(&img),
+                        hash: {
+                            let h = perceptual::ahash(&img);
+                            println!("{:?} hashed...", path);
+                            h
+                        },
                         path,
                     })
                     .collect::<Vec<_>>()
@@ -76,8 +90,13 @@ fn main() {
             HashType::DHASH => {
                 // println!("picked dhash");
                 file_iterator
+                    .par_bridge()
                     .map(|(img, path)| ImageEntry {
-                        hash: perceptual::dhash(&img),
+                        hash: {
+                            let h = perceptual::dhash(&img);
+                            println!("{:?} hashed...", path);
+                            h
+                        },
                         path,
                     })
                     .collect::<Vec<_>>()
@@ -87,14 +106,28 @@ fn main() {
                 vec![]
             }
         };
+
+        println!("creating minimum spanning tree...");
         let mimimum_spanning_tree = HammingMST::new(&image_info_list).unwrap();
 
         println!("{:?}", image_info_list);
         println!("{:?}", mimimum_spanning_tree);
 
-
-        mimimum_spanning_tree.hamiltonian_circuit(|sf|{
-            println!("{}",sf.idx);
+        let mut file_name = 0;
+        let mut sym_link_path = PathBuf::new();
+        std::fs::create_dir("./sorted");
+        mimimum_spanning_tree.dfs_preorder_iterative(|_, sf| {
+            // println!("{}", sf.idx);
+            let image = &image_info_list[sf.idx];
+            if let Some(ext) = image.path.extension() {
+                sym_link_path.clear();
+                sym_link_path.push("./sorted/");
+                sym_link_path.push(format!("{}", file_name));
+                sym_link_path.set_extension(ext);
+                println!("{:?} -> {:?}", image.path, sym_link_path);
+                std::os::unix::fs::symlink(&image.path, &sym_link_path);
+                file_name += 1;
+            }
         });
 
         //below is the algorithm where I group images based on similarity score

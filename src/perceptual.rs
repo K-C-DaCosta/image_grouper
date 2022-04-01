@@ -26,7 +26,7 @@ pub fn dhash(image: &image::DynamicImage) -> u64 {
     for i in 0..8 {
         for j in 0..8 {
             let a = downscaled.get_pixel(j, i)[0];
-            let b = downscaled.get_pixel(j, i + 1)[0];
+            let b = downscaled.get_pixel(j+1, i)[0];
             hash |= ((a < b) as u64) << (j + i * 8);
         }
     }

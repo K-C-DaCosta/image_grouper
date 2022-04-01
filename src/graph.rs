@@ -1,4 +1,10 @@
 use super::*;
+use rayon::prelude::*;
+use std::{
+    cmp::{Ordering, Reverse},
+    collections::BinaryHeap,
+};
+
 #[derive(Debug)]
 pub struct StackFrame {
     pub idx: usize,
@@ -8,13 +14,158 @@ pub struct StackFrame {
 }
 
 #[derive(Debug)]
+/// contructus a minimum spanning tree were hamming distance is minimized
 pub struct HammingMST {
     pub graph: HashMap<usize, Vec<usize>>,
+    root: usize,
 }
 impl HammingMST {
+    //create minimum spanning tree with kruskals algorithm
     pub fn new(nodes: &[ImageEntry]) -> Option<Self> {
-        let mut visited_list = Vec::new();
-        let mut visited_table = HashSet::<usize>::new();
+        #[derive(Copy, Clone, Eq, Ord, Debug)]
+        pub struct Edge {
+            a: usize,
+            b: usize,
+            cost: u64,
+        }
+        impl PartialEq for Edge {
+            fn eq(&self, other: &Self) -> bool {
+                self.cost.eq(&other.cost)
+            }
+        }
+        impl PartialOrd for Edge {
+            fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+                self.cost.partial_cmp(&other.cost)
+            }
+        }
+
+        if nodes.len() <= 1 {
+            return None;
+        }
+
+        let mut graph = HashMap::<usize, Vec<usize>>::with_capacity(nodes.len());
+        let mut edge_table = BinaryHeap::new();
+        let mut disjoint_sets: Vec<HashSet<usize>> = vec![];
+
+        let edge_iter = nodes
+            .iter()
+            .enumerate()
+            .flat_map(|(a_idx, a_info)| {
+                nodes
+                    .iter()
+                    .enumerate()
+                    .map(move |(b_idx, b_info)| (a_idx, a_info, b_idx, b_info))
+            })
+            .filter(|(a, _, b, _)| a < b)
+            .map(|(a, ai, b, bi)| {
+                Reverse(Edge {
+                    a,
+                    b,
+                    cost: perceptual::hamming_distance(ai.hash, bi.hash),
+                })
+            });
+
+        for x in edge_iter {
+            // println!("{:?}",x);
+            edge_table.push(x);
+        }
+
+        while let Some(Reverse(edge)) = edge_table.pop() {
+            // println!("{:?} popped..", edge);
+            let a = edge.a;
+            let b = edge.b;
+
+            let a_in_mst = graph.contains_key(&a);
+            let b_in_mst = graph.contains_key(&b);
+
+            if a_in_mst != b_in_mst {
+                if a_in_mst {
+                    graph.get_mut(&a).unwrap().push(b);
+                    graph.insert(b, vec![a]);
+
+                    disjoint_sets
+                        .iter_mut()
+                        .find(|set| set.contains(&a))
+                        .expect("set should exist")
+                        .insert(b);
+                } else {
+                    graph.get_mut(&b).unwrap().push(a);
+                    graph.insert(a, vec![b]);
+
+                    disjoint_sets
+                        .iter_mut()
+                        .find(|set| set.contains(&b))
+                        .expect("set should exist")
+                        .insert(a);
+                }
+            } else if a_in_mst == false && b_in_mst == false {
+                graph.insert(a, vec![b]);
+                graph.insert(b, vec![a]);
+
+                disjoint_sets.push(HashSet::new());
+                disjoint_sets.last_mut().unwrap().insert(a);
+                disjoint_sets.last_mut().unwrap().insert(b);
+            } else {
+                let mut sets_with_a_or_b_iter = disjoint_sets
+                    .iter()
+                    .enumerate()
+                    .filter(|(_k, g)| g.contains(&a) != g.contains(&b))
+                    .map(|(k, _)| k);
+
+                let res_1 = sets_with_a_or_b_iter.next();
+                let res_2 = sets_with_a_or_b_iter.next();
+                if let Some((set_idx_1, set_idx_2)) = res_1.zip(res_2) {
+                    let union = disjoint_sets[set_idx_1]
+                        .union(&disjoint_sets[set_idx_2])
+                        .map(|&a| a)
+                        .collect::<HashSet<_>>();
+
+                    if set_idx_1 > set_idx_2 {
+                        disjoint_sets.remove(set_idx_1);
+                        disjoint_sets.remove(set_idx_2);
+                    } else {
+                        disjoint_sets.remove(set_idx_2);
+                        disjoint_sets.remove(set_idx_1);
+                    }
+
+                    disjoint_sets.push(union);
+
+                    graph
+                        .get_mut(&a)
+                        .expect("both a and b should exist in graph")
+                        .push(b);
+                    graph
+                        .get_mut(&b)
+                        .expect("both a and b should exist in graph")
+                        .push(a);
+                }
+            }
+        }
+
+        Some(Self { graph, root:0 })
+    }
+
+    /// create minimum spanning tree with prims algorithm
+    pub fn new_prims(nodes: &[ImageEntry]) -> Option<Self> {
+        #[derive(Eq,Ord)]
+        pub struct HeapKey {
+            a_idx: usize,
+            b_idx: usize,
+            dist: u64,
+        }
+        impl PartialEq for HeapKey {
+            fn eq(&self, other: &Self) -> bool {
+                self.dist.eq(&other.dist)
+            }
+        }
+        impl PartialOrd for HeapKey {
+            fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+                self.dist.partial_cmp(&other.dist)
+            }
+        }
+
+        let mut visited_list = Vec::with_capacity(nodes.len());
+        let mut visited_table = HashSet::<usize>::with_capacity(nodes.len());
         let mut graph = HashMap::new();
 
         if nodes.len() <= 1 {
@@ -40,9 +191,9 @@ impl HammingMST {
                 .map(|(vidx, vhash, adj_idx, adj_hash)| {
                     (vidx, adj_idx, perceptual::hamming_distance(vhash, adj_hash))
                 })
+                .par_bridge()
                 .min_by_key(|&(_, _, dist)| dist);
-
-            if let Some((vidx, adj_idx, _dist)) = lowest_cost_edge {
+            if let Some((vidx, adj_idx, _dist)) = lowest_cost_edge{
                 visited_list.push(adj_idx);
                 visited_table.insert(adj_idx);
                 graph.insert(adj_idx, vec![]);
@@ -52,25 +203,29 @@ impl HammingMST {
                 nodes_left -= 1;
             }
         }
-        Some(Self { graph })
+        Some(Self { graph, root: 0 })
     }
 
-    pub fn hamiltonian_circuit<CB: Fn(&StackFrame)>(&self, call_back: CB) {
+    /// do a dfs on the tree
+    pub fn dfs_preorder_iterative<CB: FnMut(&Self, &StackFrame)>(&self, mut call_back: CB) {
         let graph = &self.graph;
+        let mut visited = HashSet::<usize>::new();
         let mut stack: Vec<StackFrame> = Vec::new();
 
+        let root = self.root;
+
         stack.push(StackFrame {
-            idx: 0,
+            idx: root,
             edge_idx: 0,
-            len: self.graph.get(&0).unwrap().len(),
+            len: self.graph.get(&root).unwrap().len(),
             printed: false,
         });
 
         while let Some(sf) = stack.pop() {
-            let mut sf = sf; 
+            let mut sf = sf;
 
             if sf.printed == false {
-                call_back(&sf);
+                call_back(self, &sf);
             }
 
             // edges exahasted
@@ -82,6 +237,7 @@ impl HammingMST {
             let edge_cursor = sf.edge_idx;
             sf.edge_idx += 1;
             sf.printed = true;
+            visited.insert(cur_node);
             stack.push(sf);
 
             let adj_node_list = graph.get(&cur_node).expect("cur_node should always exist");
@@ -90,13 +246,14 @@ impl HammingMST {
             if edge_cursor < adj_node_children_len {
                 let idx = adj_node_list[edge_cursor];
                 let len = graph.get(&idx).expect("node should exist").len();
-
-                stack.push(StackFrame {
-                    idx,
-                    edge_idx: 0,
-                    len,
-                    printed: false,
-                });
+                if visited.contains(&idx) == false {
+                    stack.push(StackFrame {
+                        idx,
+                        edge_idx: 0,
+                        len,
+                        printed: false,
+                    });
+                }
             }
         }
     }
