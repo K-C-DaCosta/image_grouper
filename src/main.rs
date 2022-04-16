@@ -1,11 +1,13 @@
 use clap::{arg, command, Command};
 use image_grouper::{filesysutils::*, graph::HammingMST, perceptual, *};
+use path_absolutize::*;
 use rayon::prelude::*;
 use serde::Serialize;
 use std::{
     collections::HashMap,
     env,
     path::{Path, PathBuf},
+    time::{Duration, Instant},
 };
 
 #[derive(Serialize)]
@@ -21,6 +23,8 @@ fn main() {
             arg!([directory] "will recursively traverse from here to collect group images")
                 .min_values(1),
         )
+        .about("specify output directory")
+        .arg(arg!( -o --output [OUTPUT_DIRECTORY] "directory of sorted files").max_values(1))
         .arg(
             arg!(
                 -i --images <IMAGE_FILES> "expects specific paths of images to group"
@@ -51,6 +55,8 @@ fn main() {
         "phash" => HashType::PHASH,
         _ => HashType::default(),
     };
+
+    let output_directory: &Path = matches.value_of("output").unwrap_or("./sorted").as_ref();
 
     if let Some(directories) = matches.values_of("directory") {
         //setup an iterator to bfs the filesystem for image files
@@ -102,7 +108,7 @@ fn main() {
                     .collect::<Vec<_>>()
             }
             _ => {
-                eprintln!("{:?} not implemented", hash_method);
+                eprintln!("[{:?}] not implemented", hash_method);
                 vec![]
             }
         };
@@ -110,99 +116,35 @@ fn main() {
         println!("creating minimum spanning tree...");
         let mimimum_spanning_tree = HammingMST::new(&image_info_list).unwrap();
 
-        println!("{:?}", image_info_list);
-        println!("{:?}", mimimum_spanning_tree);
+        // println!("{:?}", image_info_list);
+        // println!("{:?}", mimimum_spanning_tree);
 
         let mut file_name = 0;
         let mut sym_link_path = PathBuf::new();
-        std::fs::create_dir("./sorted");
-        mimimum_spanning_tree.dfs_preorder_iterative(|_, sf| {
+
+        std::fs::create_dir(output_directory);
+
+        let mut circuit = mimimum_spanning_tree
+            .iter()
+            .filter_map(|a| a)
+            .collect::<Vec<_>>();
+
+        // spend extactly 10 seconds iteratively improving the tour
+        graph::iteratively_improve_tour(30_000_000, 10_000, &mut circuit, &image_info_list);
+
+        circuit.iter().for_each(|&idx| {
             // println!("{}", sf.idx);
-            let image = &image_info_list[sf.idx];
+            let image = &image_info_list[idx];
+            let absolute_path = image.path.absolutize().unwrap();
             if let Some(ext) = image.path.extension() {
                 sym_link_path.clear();
-                sym_link_path.push("./sorted/");
+                sym_link_path.push(output_directory);
                 sym_link_path.push(format!("{}", file_name));
                 sym_link_path.set_extension(ext);
-                println!("{:?} -> {:?}", image.path, sym_link_path);
-                std::os::unix::fs::symlink(&image.path, &sym_link_path);
+                // println!("{:?} -> {:?}", absolute_path, sym_link_path);
+                std::os::unix::fs::symlink(&absolute_path, &sym_link_path);
                 file_name += 1;
             }
         });
-
-        //below is the algorithm where I group images based on similarity score
-        // let mut group_counter = 0;
-        // let mut group_table: HashMap<GroupID, GroupInfo> = HashMap::new();
-        // const EPSILON: u64 = 80;
-
-        // for i in 0..image_info_list.len() {
-        //     let ImageEntry {
-        //         hash: hash_a,
-        //         path: _path_a,
-        //     } = &image_info_list[i];
-
-        //     let mut belongs_to_group = false;
-        //     //check if the image is already in a bucket
-        //     for (_, groups) in group_table.iter_mut() {
-        //         let group_hash = groups.hash;
-        //         let score = perceptual::similarity_score(*hash_a, group_hash);
-        //         if score > EPSILON {
-        //             groups.similar_images.push(ImageInfo {
-        //                 hash: *hash_a,
-        //                 image_idx: i,
-        //             });
-
-        //             belongs_to_group = true;
-        //             break;
-        //         }
-        //     }
-        //     if belongs_to_group {
-        //         continue;
-        //     }
-
-        //     for j in i + 1..image_info_list.len() {
-        //         let ImageEntry {
-        //             hash: hash_b,
-        //             path: _path_b,
-        //         } = &image_info_list[j];
-
-        //         //score is between 0-100
-        //         let score = perceptual::similarity_score(*hash_a, *hash_b);
-
-        //         if score > EPSILON {
-        //             //the two images are similar
-        //             //create a group with two of the images inside
-        //             group_table.insert(
-        //                 group_counter,
-        //                 GroupInfo {
-        //                     hash: *hash_a,
-        //                     similar_images: vec![
-        //                         ImageInfo {
-        //                             hash: *hash_a,
-        //                             image_idx: i,
-        //                         },
-        //                         ImageInfo {
-        //                             hash: *hash_b,
-        //                             image_idx: j,
-        //                         },
-        //                     ],
-        //                 },
-        //             );
-
-        //             //increment group counter
-        //             group_counter += 1;
-        //         }
-        //     }
-        // }
-
-        // let output = ProgramOutput {
-        //     image_info_list,
-        //     group_table,
-        // };
-        // if let Ok(json) = serde_json::to_string(&output) {
-        //     println!("{}", json);
-        // } else {
-        //     eprintln!("Error: failed to serialize grouping data");
-        // }
     }
 }

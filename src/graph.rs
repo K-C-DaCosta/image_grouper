@@ -3,6 +3,7 @@ use rayon::prelude::*;
 use std::{
     cmp::{Ordering, Reverse},
     collections::BinaryHeap,
+    time::Instant,
 };
 
 #[derive(Debug)]
@@ -11,6 +12,77 @@ pub struct StackFrame {
     pub edge_idx: usize,
     pub len: usize,
     pub printed: bool,
+}
+
+/// explicit DFS as rust iterator 
+pub struct MSTIterator<'a> {
+    graph: &'a HashMap<usize, Vec<usize>>,
+    visited: HashSet<usize>,
+    stack: Vec<StackFrame>,
+}
+impl<'a> MSTIterator<'a> {
+    pub fn new(g: &'a HammingMST) -> Self {
+        let graph = &g.graph;
+        let root = g.root;
+        let stack = vec![StackFrame {
+            idx: root,
+            edge_idx: 0,
+            len: graph.get(&root).unwrap().len(),
+            printed: false,
+        }];
+        Self {
+            graph,
+            visited: HashSet::new(),
+            stack,
+        }
+    }
+}
+impl<'a> Iterator for MSTIterator<'a> {
+    type Item = Option<usize>;
+    fn next(&mut self) -> Option<Self::Item> {
+        let stack = &mut self.stack;
+        let visited = &mut self.visited;
+        let graph = &mut self.graph; 
+
+        let mut res = None;
+        stack.pop().map(|sf| {
+            let mut sf = sf;
+
+            if sf.printed == false {
+                res = Some(sf.idx)
+            }
+
+            // edges exahasted
+            if sf.edge_idx >= sf.len {
+                return None;
+            }
+
+            let cur_node = sf.idx;
+            let edge_cursor = sf.edge_idx;
+            sf.edge_idx += 1;
+            sf.printed = true;
+            visited.insert(cur_node);
+            stack.push(sf);
+
+            let adj_node_list = graph.get(&cur_node).expect("cur_node should always exist");
+            let adj_node_children_len = adj_node_list.len();
+
+            if edge_cursor < adj_node_children_len {
+                let idx = adj_node_list[edge_cursor];
+                let len = graph.get(&idx).expect("node should exist").len();
+                if visited.contains(&idx) == false {
+                    stack.push(StackFrame {
+                        idx,
+                        edge_idx: 0,
+                        len,
+                        printed: false,
+                    });
+                }
+            }
+
+            res
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -142,12 +214,12 @@ impl HammingMST {
             }
         }
 
-        Some(Self { graph, root:0 })
+        Some(Self { graph, root: 0 })
     }
 
     /// create minimum spanning tree with prims algorithm
     pub fn new_prims(nodes: &[ImageEntry]) -> Option<Self> {
-        #[derive(Eq,Ord)]
+        #[derive(Eq, Ord)]
         pub struct HeapKey {
             a_idx: usize,
             b_idx: usize,
@@ -193,7 +265,7 @@ impl HammingMST {
                 })
                 .par_bridge()
                 .min_by_key(|&(_, _, dist)| dist);
-            if let Some((vidx, adj_idx, _dist)) = lowest_cost_edge{
+            if let Some((vidx, adj_idx, _dist)) = lowest_cost_edge {
                 visited_list.push(adj_idx);
                 visited_table.insert(adj_idx);
                 graph.insert(adj_idx, vec![]);
@@ -205,6 +277,12 @@ impl HammingMST {
         }
         Some(Self { graph, root: 0 })
     }
+
+    pub fn iter<'a>(&'a self)->MSTIterator<'a>{
+        MSTIterator::new(&self)
+    }
+
+
 
     /// do a dfs on the tree
     pub fn dfs_preorder_iterative<CB: FnMut(&Self, &StackFrame)>(&self, mut call_back: CB) {
@@ -257,4 +335,44 @@ impl HammingMST {
             }
         }
     }
+}
+
+
+pub fn iteratively_improve_tour(max_iterations:u64, max_time:u128, circuit:&mut Vec<usize>, nodes:&Vec<ImageEntry>){
+    let len = nodes.len(); 
+    let t0 = Instant::now();
+    let mut iterations = 0; 
+    
+    let calc_cost = |c:&Vec<usize>|->u64 {
+        let mut cost = 0; 
+        for i in 0..len-1 {
+            let hash_i = nodes[c[i]].hash;
+            let hash_j = nodes[c[i+1]].hash; 
+            cost+=perceptual::hamming_distance(hash_i,hash_j);
+        }
+        cost
+    };
+
+    let mut cost = calc_cost(&circuit);
+
+    let before = cost; 
+    
+    while t0.elapsed().as_millis() < max_time && iterations < max_iterations{
+        let a = fastrand::usize(0..len);
+        let b = fastrand::usize(0..len);
+        if a != b {
+            circuit.swap(a, b);
+            let new_cost = calc_cost(&circuit);
+            if new_cost < cost {
+               
+                cost = new_cost;
+            }else{
+                circuit.swap(a, b);
+            }
+        }
+        iterations+=1; 
+    }
+
+    println!("iteratively improved by: [before = {}, after = {}]",before, cost);
+
 }
